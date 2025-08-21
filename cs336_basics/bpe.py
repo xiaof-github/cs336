@@ -1,6 +1,7 @@
 import regex as re
 from collections import defaultdict
 from tqdm.contrib.concurrent import process_map
+import time
 
 PAT = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
@@ -28,28 +29,30 @@ def word2bytes(word):
     a = list(word.encode('utf-8'))
     return tuple(bytes([i]) for i in a)
 
+
+
 def count_word(text):
     "Split text into word bytes using GPT2 pattern and count word bytes frequency."
-    word_cnt = defaultdict(int)
+    word_cnt = {}
     for m in PAT.finditer(text):
         word = m.group(0)
         word_bytes = word2bytes(word)
         if len(word_bytes)>=2:
-            word_cnt[word_bytes]+=1
+            word_cnt[word_bytes] = word_cnt.get(word_bytes, 0) + 1
     return word_cnt
 
 def merge_dicts(dicts):
-    merged = defaultdict(int)
+    merged = {}
     for d in dicts:
         for k, v in d.items():
-            merged[k] += v
+            merged[k] = merged.get(k, 0) + v
     return merged
 
 def count_pair(word_cnt):
-    pair_cnt = defaultdict(int)
+    pair_cnt = {}
     for word_bytes,cnt in word_cnt.items():
         for pair in zip(word_bytes[:-1],word_bytes[1:]):
-            pair_cnt[pair]+=cnt
+            pair_cnt[pair] = pair_cnt.get(pair,0) + cnt
     return pair_cnt
 
 def get_max_pair(pair_cnt):
@@ -82,8 +85,8 @@ def apply_merge(word_bytes,merge):
 
 def update_cnt(word_cnt,pair_cnt, merge_pair):
 
-    new_word_cnt = defaultdict(int)
-    new_pair_cnt = defaultdict(int, pair_cnt) # copy with defaultdict
+    new_word_cnt = {}
+    new_pair_cnt = pair_cnt.copy() # copy with defaultdict
 
     for word_bytes,cnt in word_cnt.items():
 
@@ -93,12 +96,12 @@ def update_cnt(word_cnt,pair_cnt, merge_pair):
 
         # Keep the original count if the merge not appear in the key
         if merge_pair not in old_pairs:
-            new_word_cnt[word_bytes]+=cnt
+            new_word_cnt[word_bytes]= new_word_cnt.get(word_bytes, 0) + cnt
             continue
 
         # Use updated key if merge appear
         new_word = apply_merge(word_bytes,merge_pair)
-        new_word_cnt[new_word]+=cnt
+        new_word_cnt[new_word] = new_word_cnt.get(new_word, 0) + cnt
 
         #--------for pair cnt ----------------
 
@@ -111,19 +114,21 @@ def update_cnt(word_cnt,pair_cnt, merge_pair):
         # Count new pairs in the new word
         new_pairs = list(zip(new_word[:-1], new_word[1:]))
         for p in new_pairs:
-            new_pair_cnt[p] += cnt
+            new_pair_cnt[p] = new_pair_cnt.get(p, 0) + cnt
 
     return new_word_cnt,new_pair_cnt
 
 
-def train_bpe(input_path,vocab_size,special_tokens):
+def train_bpe2(input_path,vocab_size,special_tokens):
 
     text = read_text(input_path)
     chunks = split_by_special(text,special_tokens)
 
     # Only parallelize if chunk count is big enough
-    if len(chunks) < 4: word_dicts = list(map(count_word, chunks))
+    if len(chunks) < 4: word_dicts = [count_word(chunk) for chunk in chunks]
     else: word_dicts = process_map(count_word, chunks, chunksize=1)
+
+    # print(word_dicts)
 
     word_cnt = merge_dicts(word_dicts)
     pair_cnt = count_pair(word_cnt)
@@ -139,3 +144,17 @@ def train_bpe(input_path,vocab_size,special_tokens):
         merges.append(max_pair)
         word_cnt, pair_cnt = update_cnt(word_cnt,pair_cnt,max_pair)
     return vocab, merges
+
+if __name__ == "__main__":
+    input_path = "/root/project/assignment1-basics/tests/fixtures/corpus.en"
+    start_time = time.time()
+    vocab, _ = train_bpe2(
+        input_path=input_path,
+        vocab_size=500,
+        special_tokens=["<|endoftext|>"],
+    )
+    end_time = time.time()
+    assert end_time - start_time < 1.5
+    
+    print("Vocabulary:", vocab)
+    

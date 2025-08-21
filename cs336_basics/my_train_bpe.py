@@ -1,41 +1,25 @@
 from collections import defaultdict
 import copy
+import regex as re
+from tqdm.contrib.concurrent import process_map
 
-class BPE_train:
-    def __init__(self) -> None:
-        self.vocab = {}
+def add_special_tokens(vocab, tokens):
+    for tok in tokens:
+        vocab[len(vocab)] = tok.encode("utf-8") 
+def setBaseToken(vocab):
+    for i in range(0, 256):
+        vocab[i] = bytes([i])
 
-    def add_special_tokens(self, tokens):
-        for tok in tokens:
-            self.vocab[len(self.vocab)] = tok.encode("utf-8") 
-    def setBytes(self):
-        for i in range(len(self.vocab), 256):
-            self.vocab[i] = bytes([i])
-    
-    def merge(self, corpus: list[list[str]], max_pair):
-        if max_pair.encode("utf-8") not in self.vocab.values():    
-            self.vocab[len(self.vocab)] = max_pair.encode("utf-8") 
-        
-        for word in corpus:
-            i = 0
-            while i < len(word):
-    
-                if len(word) == 1:
-                    pair = word[i]
-                    i += 1
-                    continue
+PAT = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
-                if i < len(word) - 1:
-                    pair = (word[i], word[i + 1])
-                else:
-                    break
-                merged = ''.join(pair)
-                if merged == max_pair and len(word) > 1:
-                    word[i] = merged
-                    word.pop(i + 1)
-                i += 1                
-                
-        return
+def get_max_pair(pair_cnt):
+    max_count = -1
+    max_pair = None
+    for pair, count in pair_cnt.items():
+        if count > max_count or (count == max_count and pair > max_pair):
+            max_count = count
+            max_pair = pair
+    return max_pair
 
 def pre_tokenization(corpus):
     frequency = {}  # 默认值为0
@@ -59,18 +43,16 @@ def set_stats(corpus: list[list[str]]):
                 frequency[merged] = 1
     return frequency
 
-def get_max(frequency):    
-    max_count = 0
-    max_pair = None
-    for pair, count in frequency.items():
-        if count > max_count:
-            max_count = count
-            max_pair = pair
-        elif count == max_count:
-            if pair > max_pair:
-                max_pair = pair
-        
-    return max_pair, max_count
+def count_word(text):
+    "Split text into word bytes using GPT2 pattern and count word bytes frequency."
+    word_cnt = {}
+    for m in PAT.finditer(text):
+        word = m.group(0)
+        a = list(word.encode('utf-8'))
+        word_bytes = tuple(bytes([i]) for i in a)         
+        if len(word_bytes)>=2:
+            word_cnt[word_bytes] = word_cnt.get(word_bytes, 0) + 1
+    return word_cnt
 
 def read_text(input_path):
     with open(input_path, "r", encoding="utf-8") as f:
@@ -78,34 +60,84 @@ def read_text(input_path):
     return text
 
 def split_by_special(text, special_tokens, drop_special=True) -> list[str]:    
-    return list(text)
+    if not special_tokens:
+        return [text]
 
-def train_bpe(input_path,vocab_size,special_tokens):
+    # Sort by descending length to prioritize longer tokens (e.g., "<|endoftext|><|endoftext|>" before "<|endoftext|>")
+    special_tokens = sorted(special_tokens, key=len, reverse=True)
 
-    text = read_text(input_path)
+    pattern = "|".join(re.escape(tok) for tok in special_tokens)
+    if not drop_special: pattern = f"({pattern})"
+
+    pattern = re.compile(pattern)
+    chunks = pattern.split(text)
+    return [c for c in chunks if c]
+
+def train_bpe1(input_path,vocab_size,special_tokens):
+
+    text = read_text(input_path)    
     chunks = split_by_special(text,special_tokens)
 
-    bpe = BPE_train()
-    bpe.add_special_tokens(special_tokens)
-    bpe.setBytes()
+    vocab = {}
+    setBaseToken(vocab)
+    add_special_tokens(vocab, special_tokens)
     
-    frequency = pre_tokenization(chunks)
-    # print(f"frequency: {frequency}")
-    corpus = [list(word) for word in chunks]
+    # word_dicts = process_map(count_word, chunks, chunksize=1)
 
-    tmp_frequency = set_stats(corpus)
-    max_pair, max_count = get_max(tmp_frequency)
-    merges = []
-    merges.append(max_pair)
-    while max_count > 1 and len(bpe.vocab) < vocab_size:
+    pre_bytes: list[list[bytes]] = []
+    print(len(chunks))
+    for doc in chunks:
+        tokens = [match.group(0).encode("utf-8") for match in re.finditer(PAT, doc)]
+        for token in tokens:
+            token_bytes = [bytes([b]) for b in token]
+            pre_bytes.append(token_bytes)
+    
+    
+    word_dicts = [count_word(chunk) for chunk in chunks]
+    print(len(word_dicts))
+    # print(word_dicts[:10])
 
-        print(f"max pair: {max_pair}, count: {max_count}")
-        bpe.merge(corpus, max_pair)
-        print(f"after merge corpus: {corpus}")
-        tmp_frequency = set_stats(corpus)
-        max_pair, max_count = get_max(tmp_frequency)
-        merges.append(max_pair)
-    vocab = copy.deepcopy(bpe.vocab)
+    merged = {}
+    for item in word_dicts:
+        for k, v in item.items():
+            merged[k] = merged.get(k, 0) + v
+    i = 0
+    for k, v in merged.items():
+        print(k, v)
+        i += 1
+        if i > 10: break
+    
+    
+
+    
+    merges : list[tuple[bytes, bytes]] = []
+    base_vocab_size = len(vocab)
+    n_merges=vocab_size-base_vocab_size
+
+    pre_tokens_bytes: list[list[bytes]] = [list(k) for k, _ in merged.items()]
+    count_pair = defaultdict(int)
+    print(f"pre_tokens_bytes: {pre_tokens_bytes[:3]}")
+    for it in pre_tokens_bytes:
+        # print(merged[tuple(it)])
+        for i in range(len(it)):
+            if i < len(it) - 1:
+                count_pair[(it[i], it[i + 1])] += 1            
+
+    print(f"count_pair: {len(count_pair)}")
+    i = 0
+    for pair, count in count_pair.items():
+        print(pair, count)
+        i += 1
+        if i > 10: break
+
+    max_pair = get_max_pair(count_pair)
+    print(f"max_pair: {max_pair}, count: {count_pair[max_pair]}")        
+
+    for i in range(n_merges):
+        
+        pass
+    
+
     return vocab, merges
 
 
@@ -115,30 +147,7 @@ if __name__ == "__main__":
     print("train bpe")
     special_tokens = ["<|endoftext|>"]
 
-    bpe = BPE_train()
-    bpe.add_special_tokens(special_tokens)
-    bpe.setBytes()
-    # print(f"vocab <|endoftext|> : {list(bpe.vocab[256])}")
+    train_bpe1("tests/fixtures/corpus.en", vocab_size, special_tokens)
+    print("done")
 
-    corpus = ["hello", "hello", "hero", "hi", "world", "so","some","some text that i'll pre-tokenize"]
-    frequency = pre_tokenization(corpus)
-    # print(f"frequency: {frequency}")
-    corpus = [list(word) for word in corpus]
-    # print(f"corpus: {corpus}")
-
-    tmp_frequency = set_stats(corpus)
-    max_pair, max_count = get_max(tmp_frequency)
-    merges = []
-    merges.append(max_pair)
-    while max_count > 1 and len(bpe.vocab) < vocab_size:
-
-        print(f"max pair: {max_pair}, count: {max_count}")
-        bpe.merge(corpus, max_pair)
-        print(f"after merge corpus: {corpus}")
-        tmp_frequency = set_stats(corpus)
-        max_pair, max_count = get_max(tmp_frequency)
-        merges.append(max_pair)
-
-    print(f"final vocab: {bpe.vocab}")
-    # print(f"final corpus: {corpus}")
 
