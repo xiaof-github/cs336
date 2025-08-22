@@ -57,6 +57,7 @@ def train_bpe(
     with Pool(processes=num_processes) as pool:
         chunk_results = pool.map(process_chunk, task_args)
     
+    print(f"chunk_results len: {len(chunk_results)}")
     # 3. Compute BPE merges
     merges : list[tuple[bytes, bytes]] = []
     pre_tokens_bytes: list[list[bytes]] = [token for chunk in chunk_results for token in chunk]
@@ -67,8 +68,15 @@ def train_bpe(
             pair = (token[i], token[i + 1])
             counts[pair] += 1
             pair_to_indices[pair].add(idx)
-
+    i = 0
+    for pair, cnt in pair_to_indices.items():
+        print(f" pair: {pair}, count: {len(cnt)}")
+        i += 1
+        if i > 20:
+            break
+    
     idx = len(vocab)
+    print(f"pre_tokens_bytes: {pre_tokens_bytes[:20]}")
     while idx < vocab_size:
         if not counts:
             break
@@ -82,7 +90,7 @@ def train_bpe(
             elif cnt == max_cnt:
                 if max_pair is None or pair > max_pair:
                     max_pair = pair
-
+        # print(f"max_pair: {max_pair}, max_cnt: {max_cnt}")
         merges.append(max_pair)
         a, b = max_pair
         new_token = a + b
@@ -116,7 +124,7 @@ def train_bpe(
                 pair = (token[i], token[i + 1])
                 counts[pair] += 1
                 pair_to_indices[pair].add(j)
-    print(f"pre_tokens_bytes: {pre_tokens_bytes[:5]}")
+    print(f"pre_tokens_bytes: {pre_tokens_bytes[:60]}")
     return vocab, merges
 
 def find_chunk_boundaries(

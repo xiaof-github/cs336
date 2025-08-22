@@ -84,39 +84,24 @@ def train_bpe1(input_path,vocab_size,special_tokens):
     
     # word_dicts = process_map(count_word, chunks, chunksize=1)
 
-    pre_bytes: list[list[bytes]] = []
+    pre_tokens_bytes: list[list[bytes]] = []
     print(len(chunks))
     for doc in chunks:
         tokens = [match.group(0).encode("utf-8") for match in re.finditer(PAT, doc)]
         for token in tokens:
             token_bytes = [bytes([b]) for b in token]
-            pre_bytes.append(token_bytes)
+            pre_tokens_bytes.append(token_bytes)
     
-    
-    word_dicts = [count_word(chunk) for chunk in chunks]
-    print(len(word_dicts))
-    # print(word_dicts[:10])
-
-    merged = {}
-    for item in word_dicts:
-        for k, v in item.items():
-            merged[k] = merged.get(k, 0) + v
-    i = 0
-    for k, v in merged.items():
-        print(k, v)
-        i += 1
-        if i > 10: break
-    
-    
-
-    
+        
+    print(len(pre_tokens_bytes))
+    print(pre_tokens_bytes[:10])
+   
     merges : list[tuple[bytes, bytes]] = []
     base_vocab_size = len(vocab)
     n_merges=vocab_size-base_vocab_size
-
-    pre_tokens_bytes: list[list[bytes]] = [list(k) for k, _ in merged.items()]
+    
     count_pair = defaultdict(int)
-    print(f"pre_tokens_bytes: {pre_tokens_bytes[:3]}")
+    
     for it in pre_tokens_bytes:
         # print(merged[tuple(it)])
         for i in range(len(it)):
@@ -130,12 +115,39 @@ def train_bpe1(input_path,vocab_size,special_tokens):
         i += 1
         if i > 10: break
 
-    max_pair = get_max_pair(count_pair)
-    print(f"max_pair: {max_pair}, count: {count_pair[max_pair]}")        
-
     for i in range(n_merges):
+        max_pair = get_max_pair(count_pair)
         
-        pass
+        if not max_pair:
+            return vocab, merges
+        merges.append(max_pair)
+        # print(f"merging: {max_pair}, count: {count_pair[max_pair]}")
+        
+        # Update the vocabulary with the new merged token
+        new_token = max_pair[0] + max_pair[1]
+        vocab[len(vocab)] = new_token
+
+        # Update the counts of pairs
+        for it in pre_tokens_bytes:
+            for i in range(len(it)):
+                if i < len(it) - 1:
+                    pair = (it[i], it[i + 1])
+                    if pair == max_pair:
+                        it[i] = new_token
+                        del it[i + 1]
+                        
+        
+        count_pair = defaultdict(int)
+        for it in pre_tokens_bytes:
+            # print(merged[tuple(it)])
+            for i in range(len(it)):
+                if i < len(it) - 1:
+                    count_pair[(it[i], it[i + 1])] += 1
+
+    # Update pairs that contain the merged token
+    # print(f"after merge, pre_tokens_bytes: {pre_tokens_bytes[:20]}")
+    # print(f"vocab: {vocab}")
+    # print(f"merges: {merges}")
     
 
     return vocab, merges
