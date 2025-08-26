@@ -2,6 +2,7 @@ from collections import defaultdict
 import copy
 import regex as re
 from tqdm.contrib.concurrent import process_map
+import yaml
 
 def add_special_tokens(vocab, tokens):
     for tok in tokens:
@@ -152,14 +153,54 @@ def train_bpe1(input_path,vocab_size,special_tokens):
 
     return vocab, merges
 
+def save_tokenizer_yaml(vocab, merges, fname):
+    "Save vocab and merges to a YAML file with UTF-8 decoding for readability."
+    # Convert bytes → string for readability
+    vocab_serializable = {
+        k: v.decode("utf-8", errors="replace") if isinstance(v, bytes) else v
+        for k, v in vocab.items()
+    }
+    merges_serializable = [
+        (a.decode("utf-8", errors="replace"), b.decode("utf-8", errors="replace"))
+        for a, b in merges
+    ]
+    
+    with open(fname, "w", encoding="utf-8") as f:
+        yaml.dump(
+            {"vocab": vocab_serializable, "merges": merges_serializable},
+            f,
+            allow_unicode=True,
+            sort_keys=False
+        )
+
+def load_tokenizer_yaml(fname):
+    "Load vocab and merges from a YAML file, converting strings back to bytes."
+    with open(fname, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    
+    vocab_loaded = {
+        int(k): v.encode("utf-8") if isinstance(v, str) else v
+        for k, v in data["vocab"].items()
+    }
+    merges_loaded = [
+        (a.encode("utf-8"), b.encode("utf-8")) for a, b in data["merges"]
+    ]
+    return vocab_loaded, merges_loaded
 
 if __name__ == "__main__":
-    vocab_size = 300
+    # vocab_size = 300
 
-    print("train bpe")
-    special_tokens = ["<|endoftext|>"]
+    # print("train bpe")
+    # special_tokens = ["<|endoftext|>"]
 
-    train_bpe1("tests/fixtures/corpus.en", vocab_size, special_tokens)
+    # train_bpe1("tests/fixtures/corpus.en", vocab_size, special_tokens)
+
+    vocab, merges = train_bpe1(
+        input_path='tests/fixtures/tinystories_sample_5M.txt',
+        vocab_size=10_000,
+        special_tokens=["<|endoftext|>","<|endoftext|><|endoftext|>"],
+    )
+    save_tokenizer_yaml(vocab,merges,'tinystories_sample.yaml')
     print("done")
 
 
